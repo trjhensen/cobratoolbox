@@ -236,7 +236,10 @@ else
 end
 
 % Unnest variable
-model = model.(string(fieldnames(model)));
+if isscalar(fieldnames(model))
+    % Loading the model in a variable might make it nested. Unnest variable
+    model = model.(string(fieldnames(model)));
+end
 
 % Change subsystem names
 model.subSystems(strmatch('Transport, endoplasmic reticular',model.subSystems,'exact'))={'Transport, endoplasmic reticulum'};
