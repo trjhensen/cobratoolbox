@@ -1,5 +1,8 @@
 function [solution, modelOut] = entropicFluxBalanceAnalysis(model, param)
-%% TBC
+% Entropy maximisation of fluxes (or fluxes and concentrations) subject to
+% mass balance, optionally coupling constraints, optionally quadratic
+% penalisation of deviation from given fluxes.
+% 
 % minimize             g.*vf'*(log(vf) -1) + (cf + ci)'*vf 
 % vf,vr,w,x,x0       + g.*vr'*(log(vr) -1) + (cr - ci)'*vr
 %                    + f.*x' *(log(x)  -1) + u0'*x 
@@ -93,16 +96,19 @@ function [solution, modelOut] = entropicFluxBalanceAnalysis(model, param)
 % model.x0u:     m x 1    non-negative upper bound on initial molecular concentrations
 % model.xl:      m x 1    non-negative lower bound on final molecular concentrations 
 % model.xu:      m x 1    non-negative lower bound on final molecular concentrations
-% model.dxl:     m x 1    real valued lower bound on difference between final and initial molecular concentrations  
-% model.dxu:     m x 1    real valued upper bound on difference between final and initial initial molecular concentrations  
+% model.dxl:     m x 1    real valued lower bound on difference between final and initial molecular concentrations    dxl <= x - x0
+% model.dxu:     m x 1    real valued upper bound on difference between final and initial initial molecular concentrations  x - x0 <= dxu
 %        
 % model.Q        (n + k) x (n + k)    positive semi-definite matrix to minimise (1/2)v'*Q*v
+%
+% model.H        (n + k) x (n + k)    positive semi-definite matrix in objective (1/2)(v-h)'*H*(v-h) to be minimised 
+% model.h        (n + k) x 1          vector in objective (1/2)(v-h)'*H*(v-h) to be minimised
 %
 % model.SConsistentMetBool: m x 1  boolean indicating  stoichiometrically consistent metabolites
 % model.SConsistentRxnBool: n x 1  boolean indicating  stoichiometrically consistent metabolites
 %
 %  param.solver:                    {('pdco'),'mosek'}
-%  param.method:                    {('fluxes'),'fluxConc')} maximise entropy of fluxes or also concentrations
+%  param.entropicFBAMethod:                    {('fluxes'),'fluxConc')} maximise entropy of fluxes or also concentrations
 %  param.printLevel:                {(0),1}
 %
 %
@@ -159,8 +165,9 @@ end
 if ~isfield(param,'solver')
     param.solver='mosek';
 end
-if ~isfield(param,'method')
-    param.method='fluxes';
+
+if ~isfield(param,'entropicFBAMethod')
+    param.entropicFBAMethod='fluxes';
 end
 if ~isfield(param,'externalNetFluxBounds')
     param.externalNetFluxBounds='original';
@@ -215,9 +222,39 @@ B = model.S(:,~model.SConsistentRxnBool);
 %% processing for fluxes
 [vl,vu,vel,veu,vfl,vfu,vrl,vru,ci,ce,cf,cr,g] = processFluxConstraints(model,param);
 
+if param.debug && 0 %TODO - remove this
+    modelProcessed = model;
+    modelProcessed.lb(model.SConsistentRxnBool)=vl;
+    modelProcessed.lb(~model.SConsistentRxnBool)=vel;
+    modelProcessed.ub(model.SConsistentRxnBool)=vu;
+    modelProcessed.ub(~model.SConsistentRxnBool)=veu;
+    solutionLP = optimizeCbModel(modelProcessed,param);
+
+    switch solutionLP.stat
+        case 0
+            solution = solutionLP;
+            message = ['solveCobraEP: LP part of EPproblem is infeasible according to solveCobraLP with ' param.solver '.'];
+            warning(message)
+
+            return
+        case 2
+            solution = solutionLP;
+            message = ['solveCobraEP: LP part of EPproblem is unbounded according to solveCobraLP with ' param.solver '.'];
+            warning(message)
+
+            return
+        case 1
+            message =['solveCobraEP: LP part of EPproblem is feasible according to solveCobraLP with ' param.solver '.'];
+            fprintf('%s\n',message)
+        otherwise
+            error('inconclusive solveCobraLP')
+    end
+    messages = cellstr(message);
+
+end
 %% optionally processing for concentrations
 %processConcConstraints
-if contains(lower(param.method),'conc')
+if contains(lower(param.entropicFBAMethod),'conc')
     [f,u0,x0l,x0u,xl,xu,dxl,dxu,vel,veu,B] = processConcConstraints(model,param);
 end
 
@@ -266,7 +303,7 @@ if isfield(model,'H')
     Onh = sparse(n,nH);
 end
 
-switch param.method
+switch param.entropicFBAMethod
         case {'fluxConc','fluxConcNorm'}
         switch param.solver
             case 'pdco'
@@ -503,7 +540,7 @@ switch param.method
                 EPproblem.buc(csense == 'G') = inf;
                 EPproblem.blc(csense == 'L') = -inf;
                 
-                if strcmp(param.method,'fluxConcNorm')
+                if strcmp(param.entropicFBAMethod,'fluxConcNorm')
                     EPproblem.c =...
                         [ci + cf;
                         -ci + cr;
@@ -528,7 +565,7 @@ switch param.method
                 %           vf, vr,         w, x, x0
                 EPproblem.d=[g; g; zeros(k,1); f;  f];
                 
-                if strcmp(param.method,'fluxConcNorm')
+                if strcmp(param.entropicFBAMethod,'fluxConcNorm')
                     P = sparse(3,size(EPproblem.A,2));
                     P(1,1:2*n)=1; % normalisation of forward + reverse fluxes
                     P(2,2*n+k+1:2*n+k+m)=1; % normalisation of concentration
@@ -575,7 +612,7 @@ switch param.method
                 else
                     t_1 = solution.auxPrimal(1);
                 end
-                if strcmp(param.method,'fluxConcNorm')
+                if strcmp(param.entropicFBAMethod,'fluxConcNorm')
                     t_vfvr = solution.auxPrimal(q+1);
                     t_x = solution.auxPrimal(q+2);
                     t_x0 = solution.auxPrimal(q+3);
@@ -600,7 +637,7 @@ switch param.method
                     y_C = solution.dual(2*m+n+1:2*m+n+nConstr);
                 end
                 %dual to normalisation constraints
-                if strcmp(param.method,'fluxConcNorm')
+                if strcmp(param.entropicFBAMethod,'fluxConcNorm')
                     y_vt = solution.dualNorm(1);
                     y_xt = solution.dualNorm(2);
                     y_x0t = solution.dualNorm(3);
@@ -631,7 +668,7 @@ switch param.method
                 else
                     k_e_1 = 0;     
                 end
-                if strcmp(param.method,'fluxConcNorm')
+                if strcmp(param.entropicFBAMethod,'fluxConcNorm')
                     k_vt    = Fty_K(q+2*n+k+2*m+1);
                     k_xt    = Fty_K(q+2*n+k+2*m+2);
                     k_x0t   = Fty_K(q+2*n+k+2*m+3);
@@ -653,7 +690,7 @@ switch param.method
                 %duals to bounds on initial concentration
                 z_x0 = solution.rcost(2*n+k+m+1:2*n+k+2*m,1);
                 
-                if strcmp(param.method,'fluxConcNorm')
+                if strcmp(param.entropicFBAMethod,'fluxConcNorm')
                     %dual to bounds on total forward and reverse flux
                     z_vt  = solution.rcost(2*n+k+2*m+1);
                     %dual to bounds on total concentration
@@ -696,7 +733,7 @@ switch param.method
                     fprintf('%8.2g %s\n',norm(k_x + u0 - y_N + z_dx + z_x + y_xt,inf),   '|| k_x  + u0 - y_N + z_dx + z_x  + y_xt ||_inf');
                     fprintf('%8.2g %s\n',norm(k_x0 + u0 + y_N - z_dx + z_x0 + y_x0t,inf),'|| k_x0 + u0 + y_N - z_dx + z_x0 + y_x0t ||_inf');
                     
-                    if strcmp(param.method,'fluxConcNorm')
+                    if strcmp(param.entropicFBAMethod,'fluxConcNorm')
                         fprintf('%8.2g %s\n',norm(k_vt - y_vt + z_vt,inf),'|| k_vt - y_vt + z_vt ||_inf');
                         fprintf('%8.2g %s\n',norm(k_xt - y_xt + z_xt,inf),'|| k_xt - y_xt + z_xt ||_inf');
                         fprintf('%8.2g %s\n',norm(k_x0t - y_x0t + z_x0t,inf),'|| k_x0t - y_x0t + z_x0t ||_inf');
@@ -759,7 +796,7 @@ switch param.method
                     end
                     
                     fprintf('\n%s\n','Thermo conditions (concentrations)')
-                    if strcmp(param.method,'fluxConcNorm')
+                    if strcmp(param.entropicFBAMethod,'fluxConcNorm')
                         fprintf('%8.2g %s\n',norm(f.*reallog(x./t_x) - f.*reallog(x0./t_x0) - 2*y_N + 2*z_dx + z_x - z_x0 + y_xt - y_x0t,inf),'|| f.*(log(x/(1''*x)) - log(x0/(1''*x0))) - 2*y_N + 2*z_dx + z_x - z_x0 + y_xt - y_x0t ||_inf');
                     else
                         fprintf('%8.2g %s\n',norm(f.*reallog(x) - f.*reallog(x0) - 2*y_N + 2*z_dx + z_x - z_x0,inf),'|| f.*(log(x/x0)) - 2*y_N + 2*z_dx + z_x - z_x0 ||_inf');
@@ -1092,25 +1129,11 @@ switch param.method
                 expConeBool = EPproblem.d~=0;
                 nExpCone  = nnz(expConeBool);
                 
-                %
-                if 1
-                    mosekParam=param;
-                    mosekParam.printLevel=param.printLevel-1;
-                    solution = solveCobraEP(EPproblem,mosekParam);
-                else
-                    [verify,method,printLevel,debug,feasTol,optTol,solver,param] =...
-                        getCobraSolverParams('EP',getCobraSolverParamsOptionsForType('EP'),param);
-                    
-                    solution = solveCobraEP(EPproblem,...
-                        'verify',verify,...
-                        'method',method,...
-                        'printLevel',printLevel,...
-                        'debug',debug,...
-                        'feasTol',feasTol,...
-                        'optTol',optTol,...
-                        'solver',solver,...
-                        param);
-                end
+
+                solveCobraEPparam=param;
+                solveCobraEPparam.printLevel=solveCobraEPparam.printLevel-1;
+                solution = solveCobraEP(EPproblem,solveCobraEPparam);
+
                 
                 switch solution.stat
                     case 1
@@ -1538,7 +1561,7 @@ switch param.method
         end
     case 'fluxTracing'
     otherwise
-        error('entropicFluxBalanceAnalysis: Incorrect method choice');
+        error('entropicFluxBalanceAnalysis: Incorrect entropicFBAMethod choice');
 end
 
 if 0
@@ -1602,7 +1625,9 @@ switch solution.stat
             solution.messages = [];
         end
     otherwise
-        solution_optimizeCbModel = optimizeCbModel(model);
+        %solution = optimizeCbModel(model, osenseStr, minNorm, allowLoops, param)
+        param.debug=1;
+        solution_optimizeCbModel = optimizeCbModel(model,'min',[],1,param);
         switch solution_optimizeCbModel.stat
             case 0
                 message = 'entropicFluxBalanceAnalysis: EPproblem is not feasible, because LP part of model is not feasible according to optimizeCbModel.';
@@ -1627,7 +1652,7 @@ modelOut.cf = cf;
 modelOut.cr = cr;
 modelOut.g = g;
 
-if contains(lower(param.method),'conc')
+if contains(lower(param.entropicFBAMethod),'conc')
     modelOut.u0 = u0;
     modelOut.f = f;
 end
