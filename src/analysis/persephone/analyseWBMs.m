@@ -1,10 +1,10 @@
-function [FBA_results, pathsToFilesForStatistics] = analyseWBMs(mWBMPath, fluxPath, rxnList, varargin)
+function analyseWBMs(mWBMPath, fluxPath, rxnList, varargin)
 % analyseWBMs predicts the optimal fluxes for a list of user-defined
 % reactions (rxnList). All predicted are further described in
 % analyseWBMsol.m.
 %
 % USAGE:
-%       [FBA_results, pathsToFilesForStatistics] = analyseWBMs(mWBMPath, fluxPath, rxnList)
+%       analyseWBMs(mWBMPath, fluxPath, rxnList)
 %
 % INPUTS:
 % mWBMPath      Path (character array) to WBMs
@@ -411,7 +411,7 @@ end
 
 % Run flux processing pipeline
 % Make an if statement here for GF/personalised testing
-[FBA_results, pathsToFilesForStatistics] = analyseWBMsol(fluxPath,paramFluxProcessing, fluxAnalysisPath);
+analyseWBMsol(fluxPath,paramFluxProcessing, fluxAnalysisPath);
 
 % slimDownFBAresults prunes FBA solution results obtained in
 % analyseWBMs.m and saves the slimmed down solution results in a
